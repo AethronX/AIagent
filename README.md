@@ -1,5 +1,7 @@
 # WhatsApp AI Receptionist (Bookings)
 
+*[العربية](README.ar.md)*
+
 An AI receptionist that answers customers on WhatsApp, checks real-time availability, books the appointment straight into Google Calendar, and follows up with a confirmation and a reminder — no human needed for routine bookings.
 
 **Built for:** salons, spas, dental clinics, barbershops/hair salons, physiotherapy clinics, and any appointment-based local business.
