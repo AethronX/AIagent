@@ -1,0 +1,134 @@
+{
+  "name": "Appointment Reminder Scheduler",
+  "nodes": [
+    {
+      "id": "e721f38c-5dac-4f81-a51f-8fbdb62d412f",
+      "name": "Hourly Reminder Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [240, 300],
+      "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 1 }] } }
+    },
+    {
+      "id": "5b3e953b-75cb-4759-9bb4-05f82e4cd269",
+      "name": "Get Appointments ~24h Out",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [520, 300],
+      "parameters": {
+        "resource": "event",
+        "operation": "getAll",
+        "calendar": { "__rl": true, "mode": "id", "value": "primary" },
+        "returnAll": true,
+        "timeMin": "={{ $now.plus(24, \"hours\").toISO() }}",
+        "timeMax": "={{ $now.plus(25, \"hours\").toISO() }}",
+        "options": { "singleEvents": true, "orderBy": "startTime", "showDeleted": false }
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "name": "Google Calendar account" } }
+    },
+    {
+      "id": "0a5cd885-b924-44fc-ada7-711d6cd1755c",
+      "name": "Extract Phone From Description",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const description = $json.description || \"\";\nconst phoneMatch = description.match(/Phone:\\s*(\\+?[0-9]+)/i);\nconst serviceMatch = description.match(/Service:\\s*(.+)/i);\nconst customerMatch = description.match(/Customer:\\s*(.+)/i);\nconst startIso = $json.start?.dateTime || $json.start?.date || \"\";\nconst startFormatted = startIso ? new Date(startIso).toLocaleTimeString(\"en-GB\", { hour: \"2-digit\", minute: \"2-digit\", timeZone: \"Asia/Muscat\" }) : \"\";\nreturn {\n  json: {\n    eventId: $json.id,\n    customerPhone: phoneMatch ? phoneMatch[1].replace(/^\\+/, \"\") : \"\",\n    customerName: customerMatch ? customerMatch[1].trim() : \"\",\n    service: serviceMatch ? serviceMatch[1].trim() : ($json.summary || \"your appointment\"),\n    startTime: startIso,\n    startTimeFormatted: startFormatted\n  }\n};"
+      }
+    },
+    {
+      "id": "37f89991-03b8-43d0-b629-e8ab5f1861d8",
+      "name": "Has Phone Number",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [1080, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.customerPhone }}", "operator": { "type": "string", "operation": "notEmpty" }, "rightValue": "" }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "69e4e5e7-f493-4821-969a-23495aea0557",
+      "name": "Skip If Already Reminded",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1360, 300],
+      "parameters": {
+        "resource": "row",
+        "operation": "rowNotExists",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "whatsapp_reminders_sent" },
+        "matchType": "anyCondition",
+        "filters": { "conditions": [{ "keyName": "eventId", "condition": "eq", "keyValue": "={{ $json.eventId }}" }] }
+      }
+    },
+    {
+      "id": "7051a390-af40-4ad5-a66a-e389584d2038",
+      "name": "Send WhatsApp Reminder",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [1640, 220],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "YOUR_WHATSAPP_PHONE_NUMBER_ID",
+        "recipientPhoneNumber": "={{ $json.customerPhone }}",
+        "messageType": "text",
+        "textBody": "=Hi {{ $json.customerName }}! This is a reminder from Lanna Grand Spa about your {{ $json.service }} appointment tomorrow at {{ $json.startTimeFormatted }}. Reply here if you need to reschedule. See you soon! 🌿"
+      },
+      "credentials": { "whatsAppApi": { "name": "WhatsApp Business Cloud account" } }
+    },
+    {
+      "id": "57e873a4-0d23-499a-ae0b-19ff65acb863",
+      "name": "Mark Reminder Sent",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [1920, 220],
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": { "__rl": true, "mode": "name", "value": "whatsapp_reminders_sent" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "eventId": "={{ $(\"Skip If Already Reminded\").item.json.eventId }}",
+            "customerPhone": "={{ $(\"Skip If Already Reminded\").item.json.customerPhone }}",
+            "sentAt": "={{ $now.toISO() }}"
+          },
+          "schema": [
+            { "id": "eventId", "displayName": "eventId", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "customerPhone", "displayName": "customerPhone", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "sentAt", "displayName": "sentAt", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f12f2618-e2c8-4d32-bead-5196ade9dd89",
+      "name": "Sticky Note 8ff49721",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "parameters": {
+        "color": 5,
+        "content": "## Appointment Reminder Scheduler\n\nRuns every hour, looks 24-25h ahead on the business Google Calendar, and WhatsApps each customer a reminder about tomorrow's appointment - once per booking (deduplicated via the \"whatsapp_reminders_sent\" Data Table).\n\nBefore activating:\n1. Create a Data Table named \"whatsapp_reminders_sent\" with string columns eventId, customerPhone, sentAt.\n2. Point \"Get Appointments ~24h Out\" at the salon's real Google Calendar.\n3. Replace YOUR_WHATSAPP_PHONE_NUMBER_ID on \"Send WhatsApp Reminder\" and configure the WhatsApp Business Cloud credential.\n4. This relies on bookings created by the WhatsApp AI Booking Receptionist workflow, which writes \"Phone: <number>\" into each event description - keep that format if you create events another way.\n\nSee README in the repo for the full setup guide."
+      }
+    }
+  ],
+  "connections": {
+    "Hourly Reminder Check": { "main": [[{ "node": "Get Appointments ~24h Out", "type": "main", "index": 0 }]] },
+    "Get Appointments ~24h Out": { "main": [[{ "node": "Extract Phone From Description", "type": "main", "index": 0 }]] },
+    "Extract Phone From Description": { "main": [[{ "node": "Has Phone Number", "type": "main", "index": 0 }]] },
+    "Has Phone Number": { "main": [[{ "node": "Skip If Already Reminded", "type": "main", "index": 0 }]] },
+    "Skip If Already Reminded": { "main": [[{ "node": "Send WhatsApp Reminder", "type": "main", "index": 0 }]] },
+    "Send WhatsApp Reminder": { "main": [[{ "node": "Mark Reminder Sent", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" }
+}

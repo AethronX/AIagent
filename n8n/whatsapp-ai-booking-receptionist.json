@@ -1,0 +1,163 @@
+{
+  "name": "WhatsApp AI Booking Receptionist",
+  "nodes": [
+    {
+      "id": "b2c2930f-c3bb-45cd-a475-859c3f14a5af",
+      "name": "Incoming WhatsApp Message",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": { "updates": ["messages"] },
+      "credentials": { "whatsAppTriggerApi": { "name": "WhatsApp Trigger account" } }
+    },
+    {
+      "id": "130dfdb5-e214-427b-85f7-c42a0862d2a0",
+      "name": "Normalize Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [520, 300],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            { "id": "customer-phone", "name": "customerPhone", "value": "={{ $json.messages[0].from }}", "type": "string" },
+            { "id": "customer-name", "name": "customerName", "value": "={{ $json.contacts?.[0]?.profile?.name ?? \"Guest\" }}", "type": "string" },
+            { "id": "message-type", "name": "messageType", "value": "={{ $json.messages[0].type }}", "type": "string" },
+            { "id": "message-text", "name": "messageText", "value": "={{ $json.messages[0].text?.body ?? $json.messages[0].button?.text ?? $json.messages[0].interactive?.button_reply?.title ?? \"\" }}", "type": "string" },
+            { "id": "phone-number-id", "name": "phoneNumberId", "value": "={{ $json.metadata?.phone_number_id ?? \"\" }}", "type": "string" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "99290ba2-ecc8-4d2d-84c0-08c2849dddee",
+      "name": "Only Text Messages",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [800, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "leftValue": "={{ $json.messageText }}", "operator": { "type": "string", "operation": "notEmpty" }, "rightValue": "" }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "f21b05b8-c464-425f-9c2f-fb0d1af4e174",
+      "name": "AI Receptionist",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [1080, 300],
+      "parameters": {
+        "promptType": "define",
+        "text": "=Customer name: {{ $json.customerName }}\nCustomer phone: {{ $json.customerPhone }}\nMessage: {{ $json.messageText }}",
+        "options": {
+          "systemMessage": "=You are the WhatsApp booking receptionist for Lanna Grand Spa, a spa and wellness salon in Oman. Current date/time context: {{ $now.setZone(\"Asia/Muscat\").toFormat(\"cccc dd LLLL yyyy, HH:mm\") }} (Asia/Muscat, +04:00).\n\nServices and default durations: Swedish/Relaxation Massage (60 min), Deep Tissue Massage (60 min), Facial Treatment (45 min), Manicure & Pedicure (75 min), Hair Styling (60 min). Business hours: daily 9:00 to 21:00, last booking starts at 20:00.\n\nGoal: help the customer book an appointment over WhatsApp.\n1. Reply in the same language the customer writes in (Arabic or English), in a warm, concise, WhatsApp-friendly tone (short lines, at most one emoji).\n2. Identify the requested service, preferred date and time, and confirm the duration to use.\n3. ALWAYS call the \"Check Calendar Availability\" tool with the computed start_time/end_time before promising a slot. Never claim a slot is free without calling this tool first.\n4. If the slot is free, call \"Create Booking\" exactly once to reserve it, then reply confirming the service, date, time and duration, and ask if they need anything else.\n5. If the slot is busy, do not call Create Booking. Propose 2-3 nearby alternative times the same day or next day and ask the customer to pick one, re-checking availability for the option they choose.\n6. If the request is unclear (missing service or time), ask a short clarifying question instead of guessing.\n7. Never invent business information you were not given above. If asked something outside booking (pricing not listed, directions, general questions), answer briefly and helpfully, or say a staff member will follow up.\n8. Keep every reply to a length reasonable for a WhatsApp message."
+        }
+      }
+    },
+    {
+      "id": "0b86eeba-2919-4149-a785-53875e71b44e",
+      "name": "Receptionist Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [1080, 560],
+      "parameters": {
+        "model": { "__rl": true, "mode": "id", "value": "gpt-5.4-mini" },
+        "options": { "temperature": 0.4 }
+      },
+      "credentials": { "openAiApi": { "name": "OpenAI account" } }
+    },
+    {
+      "id": "36adcf1e-681d-4a0c-b3a4-81d94249a2ee",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [1240, 560],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Incoming WhatsApp Message').item.json.messages[\"0\"].from }}",
+        "contextWindowLength": 12
+      }
+    },
+    {
+      "id": "1ad81c1d-041f-40be-b60b-20d2b1b80a9f",
+      "name": "Check Calendar Availability",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [1400, 560],
+      "parameters": {
+        "resource": "calendar",
+        "operation": "availability",
+        "calendar": { "__rl": true, "mode": "id", "value": "primary" },
+        "timeMin": "={{ $fromAI('start_time', 'Start of the appointment slot to check, ISO 8601 datetime with the Asia/Muscat (+04:00) offset, e.g. 2026-09-10T17:00:00+04:00') }}",
+        "timeMax": "={{ $fromAI('end_time', 'End of the slot to check, equal to start_time plus the requested service duration, ISO 8601 datetime with +04:00 offset') }}",
+        "options": { "outputFormat": "availability" }
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "name": "Google Calendar account" } }
+    },
+    {
+      "id": "02f5b35b-5702-4ecf-852d-33d63187c195",
+      "name": "Create Booking",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [1560, 560],
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendar": { "__rl": true, "mode": "id", "value": "primary" },
+        "start": "={{ $fromAI('start_time', 'Confirmed appointment start, ISO 8601 datetime with +04:00 offset. Only call this after Check Calendar Availability confirmed the slot is free.') }}",
+        "end": "={{ $fromAI('end_time', 'Confirmed appointment end, ISO 8601 datetime with +04:00 offset') }}",
+        "useDefaultReminders": true,
+        "additionalFields": {
+          "summary": "={{ $fromAI('summary', 'Short booking title, e.g. \"Massage - Fatima Al Balushi\"') }}",
+          "description": "={{ $fromAI('description', 'Booking details on separate lines: Customer: <name>, Phone: <phone with country code>, Service: <service>, Notes: <special requests or \"none\">') }}"
+        }
+      },
+      "credentials": { "googleCalendarOAuth2Api": { "name": "Google Calendar account" } }
+    },
+    {
+      "id": "ddf03dea-f1e7-4ff0-be42-984ea832d8d6",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1.1,
+      "position": [1360, 300],
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "phoneNumberId": "={{ $('Normalize Message').item.json.phoneNumberId }}",
+        "recipientPhoneNumber": "={{ $('Normalize Message').item.json.customerPhone }}",
+        "messageType": "text",
+        "textBody": "={{ $json.output }}"
+      },
+      "credentials": { "whatsAppApi": { "name": "WhatsApp Business Cloud account" } }
+    },
+    {
+      "id": "52381d12-7b45-4763-ab70-8c571f3b5055",
+      "name": "Sticky Note 58f9e916",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "parameters": {
+        "color": 4,
+        "content": "## WhatsApp AI Booking Receptionist\n\nFlow: WhatsApp message in -> normalize fields -> AI Agent (OpenAI + Google Calendar tools) -> reply sent back over WhatsApp.\n\nBefore activating:\n1. Configure the \"WhatsApp Trigger account\" and \"WhatsApp Business Cloud account\" credentials with your Meta WhatsApp Business Cloud app (Client ID/Secret and permanent access token).\n2. Point the two \"primary\" calendar references at the salon's real Google Calendar (resource picker on each Google Calendar node).\n3. Edit the system message on \"AI Receptionist\" with the real services, prices, durations and hours.\n\nSee README in the repo for the full setup guide and the Lanna Grand Spa case study."
+      }
+    }
+  ],
+  "connections": {
+    "Incoming WhatsApp Message": { "main": [[{ "node": "Normalize Message", "type": "main", "index": 0 }]] },
+    "Normalize Message": { "main": [[{ "node": "Only Text Messages", "type": "main", "index": 0 }]] },
+    "Only Text Messages": { "main": [[{ "node": "AI Receptionist", "type": "main", "index": 0 }]] },
+    "AI Receptionist": { "main": [[{ "node": "Send WhatsApp Reply", "type": "main", "index": 0 }]] },
+    "Receptionist Model": { "ai_languageModel": [[{ "node": "AI Receptionist", "type": "ai_languageModel", "index": 0 }]] },
+    "Conversation Memory": { "ai_memory": [[{ "node": "AI Receptionist", "type": "ai_memory", "index": 0 }]] },
+    "Check Calendar Availability": { "ai_tool": [[{ "node": "AI Receptionist", "type": "ai_tool", "index": 0 }]] },
+    "Create Booking": { "ai_tool": [[{ "node": "AI Receptionist", "type": "ai_tool", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" }
+}
